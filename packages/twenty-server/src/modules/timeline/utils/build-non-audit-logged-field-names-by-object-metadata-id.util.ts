@@ -1,4 +1,4 @@
-import { RelationType } from 'twenty-shared/types';
+import { FieldMetadataType, RelationType } from 'twenty-shared/types';
 import { isDefined } from 'twenty-shared/utils';
 
 import { type FlatEntityMaps } from 'src/engine/metadata-modules/flat-entity/types/flat-entity-maps.type';
@@ -6,6 +6,10 @@ import { computeMorphOrRelationFieldJoinColumnName } from 'src/engine/metadata-m
 import { isAuditLoggableFieldType } from 'src/engine/metadata-modules/field-metadata/utils/is-audit-loggable-field-type.util';
 import { type OrmFlatFieldMetadata } from 'src/engine/metadata-modules/flat-field-metadata/types/orm-flat-field-metadata.type';
 import { isMorphOrRelationFlatFieldMetadata } from 'src/engine/metadata-modules/flat-field-metadata/utils/is-morph-or-relation-flat-field-metadata.util';
+
+const isUpdatedByActorField = (flatFieldMetadata: OrmFlatFieldMetadata) =>
+  flatFieldMetadata.type === FieldMetadataType.ACTOR &&
+  flatFieldMetadata.name === 'updatedBy';
 
 export const buildNonAuditLoggedFieldNamesByObjectMetadataId = (
   flatFieldMetadataMaps: FlatEntityMaps<OrmFlatFieldMetadata>,
@@ -24,9 +28,11 @@ export const buildNonAuditLoggedFieldNamesByObjectMetadataId = (
 
     // A projection cached before the column existed has no value, so only an explicit false excludes.
     // The type rule outranks the flag: every row predating the backfill says true.
+    // updatedBy is restamped on every save and repeats the row's author, so it would turn no-op saves into entries
     const isAuditLogged =
       flatFieldMetadata.isAuditLogged !== false &&
-      isAuditLoggableFieldType(flatFieldMetadata.type);
+      isAuditLoggableFieldType(flatFieldMetadata.type) &&
+      !isUpdatedByActorField(flatFieldMetadata);
 
     if (isAuditLogged) {
       continue;

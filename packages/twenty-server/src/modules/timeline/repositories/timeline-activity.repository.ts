@@ -3,7 +3,7 @@ import { Injectable } from '@nestjs/common';
 import chunk from 'lodash.chunk';
 import { QUERY_MAX_RECORDS } from 'twenty-shared/constants';
 import { type ObjectRecord } from 'twenty-shared/types';
-import { isDefined } from 'twenty-shared/utils';
+import { isDefined, isPlainObject } from 'twenty-shared/utils';
 import { Any, In, MoreThan, type ObjectLiteral } from 'typeorm';
 
 import { POSTGRESQL_ERROR_CODES } from 'src/engine/workspace-query-executor/constants/postgres-error-codes.constants';
@@ -29,6 +29,19 @@ type TimelineActivityPayloadWorkspaceIdAndObjectSingularName = {
   workspaceId: string;
   objectSingularName: string;
 };
+
+type TimelineActivityMerge = {
+  id: string;
+  properties: Partial<ObjectRecord>;
+  workspaceMemberId: string | undefined;
+  happensAt?: Date;
+  timelineActivityTypeSnapshot?: TimelineActivityPayload['timelineActivityTypeSnapshot'];
+};
+
+const hasNonEmptyDiff = (properties: unknown): boolean =>
+  isPlainObject(properties) &&
+  isPlainObject(properties.diff) &&
+  Object.keys(properties.diff).length > 0;
 
 const ACQUIRE_TIMELINE_ACTIVITY_MERGE_LOCK = `SELECT pg_advisory_xact_lock(hashtextextended("lockName", 0))
    FROM unnest($1::text[]) WITH ORDINALITY AS "locks"("lockName", "ordinality")
@@ -205,12 +218,8 @@ export class TimelineActivityRepository {
 
         const payloadsToInsert: TimelineActivityPayloadWorkspaceIdAndObjectSingularName['payloads'] =
           [];
-        const mergesToApply: {
-          id: string;
-          properties: Partial<ObjectRecord>;
-          workspaceMemberId: string | undefined;
-          timelineActivityTypeSnapshot?: TimelineActivityPayload['timelineActivityTypeSnapshot'];
-        }[] = [];
+        const mergesToApply: TimelineActivityMerge[] = [];
+        const timelineActivityIdsToDelete: string[] = [];
 
         const timelineActivityPropertyName =
           this.getTimelineActivityPropertyName(objectSingularName);
@@ -261,13 +270,30 @@ export class TimelineActivityRepository {
               );
 
           if (isDefined(recentTimelineActivity)) {
+            const mergedProperties = objectRecordDiffMerge(
+              recentTimelineActivity.properties,
+              payload.properties,
+            );
+
+            if (
+              hasNonEmptyDiff(recentTimelineActivity.properties) &&
+              !hasNonEmptyDiff(mergedProperties)
+            ) {
+              timelineActivityIdsToDelete.push(recentTimelineActivity.id);
+              continue;
+            }
+
+            const isLaterThanRecentTimelineActivity =
+              new Date(payload.happensAt).getTime() >
+              new Date(recentTimelineActivity.happensAt).getTime();
+
             mergesToApply.push({
               id: recentTimelineActivity.id,
-              properties: objectRecordDiffMerge(
-                recentTimelineActivity.properties,
-                payload.properties,
-              ),
+              properties: mergedProperties,
               workspaceMemberId: payload.workspaceMemberId,
+              ...(isLaterThanRecentTimelineActivity && {
+                happensAt: payload.happensAt,
+              }),
               ...(!isDefined(
                 recentTimelineActivity.timelineActivityTypeSnapshot,
               ) && {
@@ -297,6 +323,10 @@ export class TimelineActivityRepository {
             timelineActivityRepository,
             objectSingularName,
             payloads: insertablePayloads,
+          }),
+          this.deleteTimelineActivities({
+            timelineActivityRepository,
+            ids: timelineActivityIdsToDelete,
           }),
         ]);
       },
@@ -448,12 +478,7 @@ export class TimelineActivityRepository {
     merges,
   }: {
     timelineActivityRepository: WorkspaceRepository<ObjectLiteral>;
-    merges: {
-      id: string;
-      properties: Partial<ObjectRecord>;
-      workspaceMemberId: string | undefined;
-      timelineActivityTypeSnapshot?: TimelineActivityPayload['timelineActivityTypeSnapshot'];
-    }[];
+    merges: TimelineActivityMerge[];
   }) {
     if (merges.length === 0) {
       return;
@@ -461,16 +486,37 @@ export class TimelineActivityRepository {
 
     await Promise.all(
       merges.map(
-        ({ id, properties, workspaceMemberId, timelineActivityTypeSnapshot }) =>
+        ({
+          id,
+          properties,
+          workspaceMemberId,
+          happensAt,
+          timelineActivityTypeSnapshot,
+        }) =>
           timelineActivityRepository.update(id, {
             properties,
             workspaceMemberId,
+            ...(isDefined(happensAt) && { happensAt }),
             ...(isDefined(timelineActivityTypeSnapshot) && {
               timelineActivityTypeSnapshot,
             }),
           }),
       ),
     );
+  }
+
+  private async deleteTimelineActivities({
+    timelineActivityRepository,
+    ids,
+  }: {
+    timelineActivityRepository: WorkspaceRepository<ObjectLiteral>;
+    ids: string[];
+  }) {
+    if (ids.length === 0) {
+      return;
+    }
+
+    await timelineActivityRepository.delete({ id: In(ids) });
   }
 
   private getTimelineActivityPropertyName(objectSingularName: string) {

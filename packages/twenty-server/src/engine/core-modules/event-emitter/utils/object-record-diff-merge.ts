@@ -1,29 +1,40 @@
-export function objectRecordDiffMerge(
-  // oxlint-disable-next-line typescript/no-explicit-any
-  oldRecord: Record<string, any>,
-  // oxlint-disable-next-line typescript/no-explicit-any
-  newRecord: Record<string, any>,
-  // oxlint-disable-next-line typescript/no-explicit-any
-): Record<string, any> {
-  // oxlint-disable-next-line typescript/no-explicit-any
-  const result: Record<string, any> = { diff: {} };
+import { fastDeepEqual, isDefined, isPlainObject } from 'twenty-shared/utils';
 
-  Object.keys(oldRecord.diff ?? {}).forEach((key) => {
-    if (newRecord.diff && newRecord.diff[key]) {
-      result.diff[key] = {
-        before: oldRecord.diff[key].before,
-        after: newRecord.diff[key].after,
-      };
-    } else {
-      result.diff[key] = oldRecord.diff[key];
+type FieldDiff = { before: unknown; after: unknown };
+
+const getFieldDiffs = (properties: unknown): Record<string, FieldDiff> =>
+  isPlainObject(properties) && isPlainObject(properties.diff)
+    ? (properties.diff as Record<string, FieldDiff>)
+    : {};
+
+export const objectRecordDiffMerge = (
+  oldProperties: unknown,
+  newProperties: unknown,
+): { diff: Record<string, FieldDiff> } => {
+  const oldDiff = getFieldDiffs(oldProperties);
+  const newDiff = getFieldDiffs(newProperties);
+
+  const mergedDiff: Record<string, FieldDiff> = {};
+
+  for (const fieldName of new Set([
+    ...Object.keys(oldDiff),
+    ...Object.keys(newDiff),
+  ])) {
+    const oldFieldDiff = oldDiff[fieldName];
+    const newFieldDiff = newDiff[fieldName];
+
+    const fieldDiff =
+      isDefined(oldFieldDiff) && isDefined(newFieldDiff)
+        ? { before: oldFieldDiff.before, after: newFieldDiff.after }
+        : (oldFieldDiff ?? newFieldDiff);
+
+    // A value edited back to where it started within the merge window is not a change
+    if (fastDeepEqual(fieldDiff.before, fieldDiff.after)) {
+      continue;
     }
-  });
 
-  Object.keys(newRecord.diff ?? {}).forEach((key) => {
-    if (!result.diff[key]) {
-      result.diff[key] = newRecord.diff[key];
-    }
-  });
+    mergedDiff[fieldName] = fieldDiff;
+  }
 
-  return result;
-}
+  return { diff: mergedDiff };
+};

@@ -1,5 +1,6 @@
 import { EventRowMainObjectUpdated } from '@/activities/timeline-activities/rows/main-object/components/EventRowMainObjectUpdated';
 import { type Meta, type StoryObj } from '@storybook/react-vite';
+import { expect, within } from 'storybook/test';
 
 import { ComponentDecorator } from 'twenty-ui/testing';
 import { ObjectMetadataItemsDecorator } from '~/testing/decorators/ObjectMetadataItemsDecorator';
@@ -50,3 +51,25 @@ export default meta;
 type Story = StoryObj<typeof EventRowMainObjectUpdated>;
 
 export const Default: Story = {};
+
+export const WithBeforeAndAfterValues: Story = {
+  args: {
+    event: {
+      id: '2',
+      properties: {
+        diff: {
+          jobTitle: {
+            before: 'Sales manager',
+            after: 'Head of sales',
+          },
+        },
+      },
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await expect(await canvas.findByText('Sales manager')).toBeVisible();
+    await expect(await canvas.findByText('Head of sales')).toBeVisible();
+  },
+};

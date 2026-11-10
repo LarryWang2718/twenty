@@ -143,6 +143,30 @@ describe('buildNonAuditLoggedFieldNamesByObjectMetadataId', () => {
     ).toEqual(new Set(['people']));
   });
 
+  it('excludes the updatedBy actor field even when flagged audit logged', () => {
+    expect(
+      buildNonAuditLoggedFieldNamesByObjectMetadataId(
+        buildMaps([
+          buildField({ universalIdentifier: 'name-field', name: 'name' }),
+          {
+            ...buildField({
+              universalIdentifier: 'updated-by-field',
+              name: 'updatedBy',
+            }),
+            type: FieldMetadataType.ACTOR,
+          },
+          {
+            ...buildField({
+              universalIdentifier: 'created-by-field',
+              name: 'createdBy',
+            }),
+            type: FieldMetadataType.ACTOR,
+          },
+        ]),
+      ).get(COMPANY_OBJECT_METADATA_ID),
+    ).toEqual(new Set(['updatedBy']));
+  });
+
   it('leaves out objects whose fields are all audit logged', () => {
     expect(
       buildNonAuditLoggedFieldNamesByObjectMetadataId(

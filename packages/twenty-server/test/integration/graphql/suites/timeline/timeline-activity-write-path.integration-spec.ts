@@ -72,10 +72,12 @@ const updateRecord = async ({
   objectMetadataSingularName,
   recordId,
   data,
+  token,
 }: {
   objectMetadataSingularName: string;
   recordId: string;
   data: object;
+  token?: string;
 }): Promise<void> => {
   const response = await makeGraphqlApiRequest(
     updateOneOperationFactory({
@@ -84,6 +86,7 @@ const updateRecord = async ({
       recordId,
       data,
     }),
+    token,
   );
 
   expect(response.body.errors).toBeUndefined();
@@ -187,6 +190,10 @@ const ROUTED_CALENDAR_EVENT_STARTS_AT = '2024-04-02T14:00:00.000Z';
 const ROUTED_CALENDAR_EVENT_RESCHEDULED_STARTS_AT = '2024-04-09T16:00:00.000Z';
 const ATTACHMENT_ID = '20202020-7171-4000-8000-000000000016';
 const ORM_V2_COMPOSITE_COMPANY_ID = '20202020-7171-4000-8000-000000000017';
+const SAME_VALUE_COMPANY_ID = '20202020-7171-4000-8000-000000000019';
+const REVERTED_COMPANY_ID = '20202020-7171-4000-8000-000000000020';
+const MERGED_HAPPENS_AT_COMPANY_ID = '20202020-7171-4000-8000-000000000021';
+const OTHER_MEMBER_SAVE_COMPANY_ID = '20202020-7171-4000-8000-000000000022';
 const BATCH_COMPANY_IDS = [
   '20202020-7171-4000-8000-000000000008',
   '20202020-7171-4000-8000-000000000009',
@@ -231,6 +238,12 @@ const CREATED_RECORD_IDS: { objectMetadataSingularName: string; id: string }[] =
       id: NON_AUDIT_LOGGED_COMPANY_ID,
     },
     { objectMetadataSingularName: 'company', id: COMPANY_ID },
+    ...[
+      SAME_VALUE_COMPANY_ID,
+      REVERTED_COMPANY_ID,
+      MERGED_HAPPENS_AT_COMPANY_ID,
+      OTHER_MEMBER_SAVE_COMPANY_ID,
+    ].map((id) => ({ objectMetadataSingularName: 'company', id })),
   ];
 
 const nonAuditLoggedFieldName = 'lastRollupAt';
@@ -547,6 +560,131 @@ describe('timeline activity write path (integration)', () => {
       expect(timelineActivities[0].properties).toEqual({
         diff: {
           name: { before: 'Rollup Host', after: 'Rollup Host Renamed' },
+        },
+      });
+    });
+
+    it('should not write an entry for an update to the current value', async () => {
+      await createRecord({
+        objectMetadataSingularName: 'company',
+        data: { id: SAME_VALUE_COMPANY_ID, name: 'Same Value' },
+      });
+
+      await updateRecord({
+        objectMetadataSingularName: 'company',
+        recordId: SAME_VALUE_COMPANY_ID,
+        data: { name: 'Same Value' },
+      });
+
+      const timelineActivities = await findTimelineActivities({
+        targetCompanyId: { eq: SAME_VALUE_COMPANY_ID },
+        timelineActivityTypeId: {
+          eq: timelineActivityTypeIdForOrThrow('updated'),
+        },
+      });
+
+      expect(timelineActivities).toHaveLength(0);
+    });
+
+    it('should remove the entry when a merged change is reverted', async () => {
+      await createRecord({
+        objectMetadataSingularName: 'company',
+        data: { id: REVERTED_COMPANY_ID, name: 'Before Revert' },
+      });
+
+      await updateRecord({
+        objectMetadataSingularName: 'company',
+        recordId: REVERTED_COMPANY_ID,
+        data: { name: 'During Revert' },
+      });
+
+      const filter = {
+        targetCompanyId: { eq: REVERTED_COMPANY_ID },
+        timelineActivityTypeId: {
+          eq: timelineActivityTypeIdForOrThrow('updated'),
+        },
+      };
+
+      expect(await findTimelineActivities(filter)).toHaveLength(1);
+
+      await updateRecord({
+        objectMetadataSingularName: 'company',
+        recordId: REVERTED_COMPANY_ID,
+        data: { name: 'Before Revert' },
+      });
+
+      expect(await findTimelineActivities(filter)).toHaveLength(0);
+    });
+
+    it('should move a merged entry to the time of its latest change', async () => {
+      await createRecord({
+        objectMetadataSingularName: 'company',
+        data: { id: MERGED_HAPPENS_AT_COMPANY_ID, name: 'Merge Start' },
+      });
+
+      const filter = {
+        targetCompanyId: { eq: MERGED_HAPPENS_AT_COMPANY_ID },
+        timelineActivityTypeId: {
+          eq: timelineActivityTypeIdForOrThrow('updated'),
+        },
+      };
+
+      await updateRecord({
+        objectMetadataSingularName: 'company',
+        recordId: MERGED_HAPPENS_AT_COMPANY_ID,
+        data: { name: 'Merge Middle' },
+      });
+
+      const [firstTimelineActivity] = await findTimelineActivities(filter);
+
+      await updateRecord({
+        objectMetadataSingularName: 'company',
+        recordId: MERGED_HAPPENS_AT_COMPANY_ID,
+        data: { name: 'Merge End' },
+      });
+
+      const timelineActivities = await findTimelineActivities(filter);
+
+      expect(timelineActivities).toHaveLength(1);
+      expect(timelineActivities[0].id).toBe(firstTimelineActivity.id);
+      expect(timelineActivities[0].properties).toEqual({
+        diff: { name: { before: 'Merge Start', after: 'Merge End' } },
+      });
+      expect(
+        new Date(timelineActivities[0].happensAt).getTime(),
+      ).toBeGreaterThan(new Date(firstTimelineActivity.happensAt).getTime());
+    });
+
+    it('should not write an entry when another member saves without changes', async () => {
+      await createRecord({
+        objectMetadataSingularName: 'company',
+        data: { id: OTHER_MEMBER_SAVE_COMPANY_ID, name: 'Shared Record' },
+      });
+
+      await updateRecord({
+        objectMetadataSingularName: 'company',
+        recordId: OTHER_MEMBER_SAVE_COMPANY_ID,
+        data: { name: 'Shared Record Renamed' },
+      });
+
+      await updateRecord({
+        objectMetadataSingularName: 'company',
+        recordId: OTHER_MEMBER_SAVE_COMPANY_ID,
+        data: { name: 'Shared Record Renamed' },
+        token: APPLE_JONY_MEMBER_ACCESS_TOKEN,
+      });
+
+      const timelineActivities = await findTimelineActivities({
+        targetCompanyId: { eq: OTHER_MEMBER_SAVE_COMPANY_ID },
+        timelineActivityTypeId: {
+          eq: timelineActivityTypeIdForOrThrow('updated'),
+        },
+      });
+
+      expect(timelineActivities).toHaveLength(1);
+      expect(timelineActivities[0].properties).toEqual({
+        diff: {
+          name: { before: 'Shared Record', after: 'Shared Record Renamed' },
         },
       });
     });

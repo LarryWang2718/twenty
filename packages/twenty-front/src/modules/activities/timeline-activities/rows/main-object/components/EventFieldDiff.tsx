@@ -8,7 +8,9 @@ import { isRelationFieldChangeValue } from '@/activities/timeline-activities/uti
 import { type FieldMetadataItem } from '@/object-metadata/types/FieldMetadataItem';
 import { type EnrichedObjectMetadataItem } from '@/object-metadata/types/EnrichedObjectMetadataItem';
 import { Trans } from '@lingui/react/macro';
+import { isObject } from '@sniptt/guards';
 import { FieldMetadataType } from 'twenty-shared/types';
+import { isDefined } from 'twenty-shared/utils';
 import { themeCssVariables } from 'twenty-ui/theme';
 import { doNotTranslate } from 'twenty-shared/i18n';
 
@@ -39,6 +41,13 @@ const StyledArrowContainer = styled.span`
   color: ${themeCssVariables.font.color.secondary};
 `;
 
+const isFieldDiffScalarValueEmpty = (value: unknown): boolean =>
+  !isDefined(value) || value === '';
+
+const isFieldDiffValueEmpty = (value: unknown): boolean =>
+  isFieldDiffScalarValueEmpty(value) ||
+  (isObject(value) && Object.values(value).every(isFieldDiffScalarValueEmpty));
+
 export const EventFieldDiff = ({
   fieldDiff,
   mainObjectMetadataItem,
@@ -67,43 +76,50 @@ export const EventFieldDiff = ({
     );
   }
 
-  const diffRecord = fieldDiff.after as Record<string, unknown> | undefined;
+  const renderFieldDiffValue = ({
+    value,
+    recordStoreId,
+  }: {
+    value: unknown;
+    recordStoreId: string;
+  }) => {
+    if (isFieldDiffValueEmpty(value)) {
+      return (
+        <StyledEmptyValue>
+          <Trans>Empty</Trans>
+        </StyledEmptyValue>
+      );
+    }
 
-  const isValueEmpty = (value: unknown): boolean =>
-    value === null || value === undefined || value === '';
-
-  const isObjectEmpty = (objectValue: Record<string, unknown>): boolean =>
-    Object.values(objectValue).every(isValueEmpty);
-
-  const isUpdatedToEmpty =
-    isValueEmpty(diffRecord) ||
-    (typeof diffRecord === 'object' &&
-      diffRecord !== null &&
-      isObjectEmpty(diffRecord));
+    return (
+      <>
+        <EventFieldDiffValueEffect
+          diffArtificialRecordStoreId={recordStoreId}
+          mainObjectMetadataItem={mainObjectMetadataItem}
+          fieldMetadataItem={fieldMetadataItem}
+          diffRecord={value as Record<string, unknown>}
+        />
+        <EventFieldDiffValue
+          diffArtificialRecordStoreId={recordStoreId}
+          mainObjectMetadataItem={mainObjectMetadataItem}
+          fieldMetadataItem={fieldMetadataItem}
+        />
+      </>
+    );
+  };
 
   return (
     <StyledEventFieldDiffContainer>
       <EventFieldDiffLabel fieldMetadataItem={fieldMetadataItem} />
+      {renderFieldDiffValue({
+        value: fieldDiff.before,
+        recordStoreId: `${diffArtificialRecordStoreId}--before`,
+      })}
       <StyledArrowContainer>→</StyledArrowContainer>
-      {isUpdatedToEmpty ? (
-        <StyledEmptyValue>
-          <Trans>Empty</Trans>
-        </StyledEmptyValue>
-      ) : (
-        <>
-          <EventFieldDiffValueEffect
-            diffArtificialRecordStoreId={diffArtificialRecordStoreId}
-            mainObjectMetadataItem={mainObjectMetadataItem}
-            fieldMetadataItem={fieldMetadataItem}
-            diffRecord={diffRecord}
-          />
-          <EventFieldDiffValue
-            diffArtificialRecordStoreId={diffArtificialRecordStoreId}
-            mainObjectMetadataItem={mainObjectMetadataItem}
-            fieldMetadataItem={fieldMetadataItem}
-          />
-        </>
-      )}
+      {renderFieldDiffValue({
+        value: fieldDiff.after,
+        recordStoreId: `${diffArtificialRecordStoreId}--after`,
+      })}
     </StyledEventFieldDiffContainer>
   );
 };

@@ -13,8 +13,12 @@ const keepVirtualModuleImportsPlugin: esbuild.Plugin = {
   setup: (build) => {
     build.onResolve(
       { filter: NON_RELATIVE_IMPORT_PATTERN },
-      ({ path: importPath }) => {
-        if (importPath.startsWith(SOURCE_ALIAS_IMPORT_PREFIX)) {
+      ({ path: importPath, kind }) => {
+        // On Windows the absolute entry path starts with a drive letter, not "/"
+        if (
+          kind === 'entry-point' ||
+          importPath.startsWith(SOURCE_ALIAS_IMPORT_PREFIX)
+        ) {
           return undefined;
         }
 
